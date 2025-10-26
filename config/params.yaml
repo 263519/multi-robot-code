@@ -1,0 +1,18 @@
+# Parameters of the point robots for behavior simulation
+basic_rules:  
+  ros__parameters:
+    mass: 1.0   # mass of the point robot
+    max_acc: 3.0 
+    max_speed: 0.9
+    min_dist: 0.3   # minimum distance between point robots for flocking
+    min_dist_to_obst: 2.0   # minimum distance to obstacle to activate avoidance 
+    
+    num_robots: 3
+    neigh_radius: 5.0   # radius around each robot to check for neighbours
+    fov_deg: 360      # angle of fov in degrees
+    w_separation: 0.5  
+    w_alignment: 0.6 
+    w_cohesion: 1.0
+    publish_rate: 10.0   # in Hz, for control timer
+
+    
