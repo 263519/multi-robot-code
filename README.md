@@ -1,16 +1,16 @@
 Instructions for editing, building, and running the robot swarm simulation.
 
-
-PREREQUISTIES 
+### 0. PREREQUISTIES 
 Before running the simulation, make sure you have the following:
 
-ROS 2 Humble installed and sourced
-
-Stage ROS2 installed
+- ROS 2 Humble installed and sourced
+- Stage ROS2 installed
 
 For example, you can add the following lines to your ~/.bashrc to source them automatically:
-source /opt/ros/humble/setup.bash
-source <your_stage_ros2_path>/install/setup.bash
+
+    source /opt/ros/humble/setup.bash
+    source <your_stage_ros2_path>/install/setup.bash
+
 
 ---
 
