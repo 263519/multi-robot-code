@@ -108,7 +108,7 @@ class BasicRules(Node):
         cos_angle = max(-1.0, min(1.0, cos_angle))  # clip
 
         angle = math.acos(cos_angle) # computing the angle between robot i and j (result in radiance, range [0, π])
-        self.get_logger().info(f"{pos_i} has angle {angle} with {pos_j}")
+        # self.get_logger().info(f"{pos_i} has angle {angle} with {pos_j}")
         # self.get_logger().info(self.fov)
 
         return abs(angle) <= self.fov / 2.0 # Check if neighbor is within half of the FOV angle to be visible
@@ -133,7 +133,7 @@ class BasicRules(Node):
             coh = np.zeros((2, 1))
 
             if len(neighbors) > 0:
-                self.get_logger().info("Neighbours detected!!")
+                # self.get_logger().info("Neighbours detected!!")
                 # --- Separation ---
                 for j in neighbors:
                     pos_j, _ = states[j]

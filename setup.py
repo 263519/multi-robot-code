@@ -12,13 +12,13 @@ setup(
         ('share/ament_index/resource_index/packages',
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
-        (os.path.join('share', package_name, 'config'), glob('config/*.yaml')),
+        (os.path.join('share', package_name, 'config'), glob(os.path.join('config', '*.yaml'))),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
     maintainer='danjayy',
     maintainer_email='lifteddebbymartha@gmail.com',
-    description='Package implementing the first part of the MRS Project 1',
+    description='Package implementing the all parts of the MRS Project 1',
     license='Apache-2.0',
     extras_require={
         'test': [
@@ -27,7 +27,8 @@ setup(
     },
     entry_points={
         'console_scripts': [
-            'basic_rules = project1.basic_rules:main'
+            'basic_rules = project1.basic_rules:main',
+            'extended_rules = project1.extended_rules:main'
         ],
     },
 )
