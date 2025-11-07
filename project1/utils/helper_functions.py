@@ -208,7 +208,7 @@ def inflate_obstacles(gridmap:np.ndarray, resolution:float, inflate_size=0.5):
         Inflated occupancy grid (0 = free, 100 = inflated obstacle)
     """
     inflate_pixels = int(np.ceil(inflate_size / resolution))
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE,
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT,
                                        (2 * inflate_pixels + 1, 2 * inflate_pixels + 1))
 
     # Convert map to binary (1 where occupied, 0 otherwise)
@@ -234,3 +234,28 @@ def yaw_from_quaternion(q) -> float:
     cosy_cosp = 1.0 - 2.0 * (q.y * q.y + q.z * q.z)
     yaw = math.atan2(siny_cosp, cosy_cosp)
     return yaw
+
+def extract_obstacle_positions(gridmap: np.ndarray, origin: list, resolution: float, obstacle_value: int = 100):
+    """
+    Extract obstacle positions (x, y) from a gridmap.
+
+    Args:
+        gridmap (np.ndarray): 2D occupancy grid map (e.g. from map server).
+        obstacle_value (int): Value representing an obstacle (default: 100).
+
+    Returns:
+        np.ndarray: Array of obstacle coordinates as (x, y) pairs in world coordinates.
+    """
+    # Find indices where the grid has obstacle values
+    obstacle_indices = np.argwhere(gridmap == obstacle_value)
+
+    x_grid = obstacle_indices[:, 1]   # column index
+    y_grid = obstacle_indices[:, 0]   # row index
+
+    x_world = origin[0] + (x_grid + 0.5) * resolution
+    y_world = origin[1] + (y_grid + 0.5) * resolution
+
+    obstacle_positions = np.column_stack((x_world, y_world))
+
+    return obstacle_positions
+

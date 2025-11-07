@@ -22,7 +22,7 @@ class ExtendedRules(Node):
         self.declare_parameter('max_speed', 0.9)
         self.declare_parameter('min_dist', 0.3)
         self.declare_parameter('min_dist_to_obst', 2.0)
-        self.declare_parameter('num_robots', 3)
+        self.declare_parameter('num_robots', 2)
         self.declare_parameter('neigh_radius', 5.0)
         self.declare_parameter('fov_deg', 360)
         self.declare_parameter('w_separation', 0.5)
@@ -44,7 +44,6 @@ class ExtendedRules(Node):
         self.max_acc = self.get_parameter('max_acc').value
         self.max_speed = self.get_parameter('max_speed').value
         self.min_dist = self.get_parameter('min_dist').value
-        self.min_dist_to_obst = self.get_parameter('min_dist_to_obst').value
         self.max_force = self.mass * self.max_acc       # Computing the maximum force with mass and acc parameters
         self.num_robots = self.get_parameter('num_robots').value
         self.neigh_radius = self.get_parameter('neigh_radius').value
@@ -65,6 +64,7 @@ class ExtendedRules(Node):
 
         # ATTRIBUTES
         self.gridmap = None
+        self.obstacles = None
         self.time_step = (1.0/self.publish_rate)
         self.priority: Dict[int, np.ndarray] = {}   # Priority order for behaviours: flocking, navigation, obstacle avoidance
         for i in range(len(self.order)): # initializing desired velocity vectors for all behaviors
@@ -112,6 +112,8 @@ class ExtendedRules(Node):
         self.resolution = gridmap.info.resolution
         self.origin = [gridmap.info.origin.position.x, gridmap.info.origin.position.y]
         self.gridmap = np.array(gridmap.data).reshape(gridmap.info.height, gridmap.info.width).T
+        inflated_gridmap = inflate_obstacles(self.gridmap, self.resolution)
+        self.obstacles = extract_obstacle_positions(inflated_gridmap, self.origin, self.resolution)  # to generate an array of obstacle positions in the environment
 
     # ------------------------------
     # Utility: check if neighbor j is within radius and FOV of robot i
@@ -197,8 +199,8 @@ class ExtendedRules(Node):
             # Compute desired velocity and scale by weight
             desired_basic = vec_add(vel_i, steer_basic)
             desired_basic = (vec_norm(desired_basic)) * self.w_flocking
-            if i != 0: # 'leader' isn't flocking (let the first robot be the 'leader')
-                self.priority[3] = desired_basic      # stored as the third by default
+            # if i != 0: # 'leader' isn't flocking (let the first robot be the 'leader')
+            self.priority[3] = desired_basic      # stored as the third by default
 
             #--------------
             # NAVIGATION RULE COMPONENT
@@ -216,8 +218,8 @@ class ExtendedRules(Node):
                 desired_nav = np.zeros((2,1))
                 
             desired_nav = (vec_norm(desired_nav)) * self.w_navigation
-            if i == 0: # let the first robot be the 'leader'
-                self.priority[2] = desired_nav      # stored as the second behavior in the dict by default
+            # if i == 0: # let the first robot be the 'leader'
+            self.priority[2] = desired_nav      # stored as the second behavior in the dict by default
 
 
             #--------------
@@ -227,19 +229,25 @@ class ExtendedRules(Node):
             if vlen < 1e-6:
                 desired_obst_avoid = np.zeros((2,1))    # skip stationary robots
             else:
-                curr_heading = vec_norm(vel_i) # using vectorial heading here, to keep everything 'clean'
-                # curr_heading = np.array([[math.cos(yaw)], [math.sin(yaw)]])
+                # curr_heading = vec_norm(vel_i) # using vectorial heading here, to keep everything 'clean'
+                curr_heading = np.array([[math.cos(yaw)], [math.sin(yaw)]])
                 # lookahead_vec = vec_scale(curr_heading, self.lookahead_distance)
                 # lookahead_point = vec_add(pos_i, lookahead_vec)
 
                 # Find obstacles near the lookahead path
-                steer_avoid = self.find_avoidance_vector(pos_i, curr_heading)
+                steer_avoid = self.find_avoidance_vector(pos_i, vel_i, yaw)
+                # steer_avoid = vec_norm(steer_avoid)
 
                 # compute resulting obstacle avoidance steering vector
                 desired_obst_avoid = vec_norm(steer_avoid / (1.0/self.publish_rate)) * self.w_obst_avoid
 
             self.priority[1] = desired_obst_avoid       # stored as the first behavior in the dict by default
             # self.get_logger().info(f"Robot {i} with obstacle avoidance: {desired_obst_avoid}")
+
+            #--------------
+            # TOTAL CONTROL VELOCITY (WA for velocity)
+            #--------------
+            # total_vel = (self.priority[1] + self.priority[2] + self.priority[3]) / 3
 
             #--------------
             # TOTAL CONTROL VELOCITY (PAA for velocity)
@@ -271,7 +279,7 @@ class ExtendedRules(Node):
                 self.get_logger().warn("Robot on the boundary. Moving back")
                 self.pub_rob_vel(i, -total_vel)
 
-    def find_avoidance_vector(self, pos_i: np.ndarray, heading:np.ndarray):
+    def find_avoidance_vector(self, pos_i: np.ndarray, vel_i, heading:np.ndarray):
         """
             Implements Reynolds' obstacle avoidance logic (simplified to grid map):
             1. Create a 'lookahead cylinder' (rectangle in 2D).
@@ -287,50 +295,197 @@ class ExtendedRules(Node):
         if self.gridmap is None:
             return np.zeros((2,1))
         
-        inflated_gridmap = inflate_obstacles(self.gridmap, self.resolution)
+        # inflated_gridmap = inflate_obstacles(self.gridmap, self.resolution)
         
         mx, my = world_to_map(pos_i, self.origin, self.resolution)
 
         if not (0 <= mx < self.map_width and 0 <= my < self.map_height):
             return np.zeros((2,1))
-        
+    
         # Sampling resolution: check points ahead along heading direction
-        steps = int(self.lookahead_distance / self.resolution)
-        most_threatening = None
-        # min_dist = float('inf')
+        # steps = int(self.lookahead_distance / self.resolution)
+        # obstacles = [row.reshape(2,1) for row in self.obstacles]
 
-        for s in range(1, steps):
-            # position of the point along the lookahead path
-            p_world = pos_i + (heading * (s * self.resolution))
-            px, py = float(p_world[0,0]), float(p_world[1,0])
-            # convert to map indices
-            mx, my = world_to_map(p_world, self.origin, self.resolution)
-            if not (0 <= mx < self.map_width and 0 <= my < self.map_height):
-                continue
- 
-            if inflated_gridmap[my, mx] == 100:   # occupied cell (threshold)
-                # compute distance of the obstacle to robot center
-                obstacle_pos = np.array([[px], [py]])
-                dist = vec_len(vec_sub(obstacle_pos, pos_i))
-                if dist <= self.min_dist_to_obst:
-                    # min_dist = dist
-                    most_threatening = np.copy(obstacle_pos)
-
-        # if no obstacle ahead, no steering correction
-        if most_threatening is None:
-            self.get_logger().info("no threatening obstacle ahead!!!")
+        obstacles = self.obstacles_in_front_fov(pos_i, heading)
+        if obstacles.size == 0:
+            self.get_logger().info(f"obstacles not seen")
             return np.zeros((2,1))
         
-        # Compute lateral (sideways) steering vector
-        to_obstacle = vec_sub(most_threatening, pos_i)
-        # perpendicular to heading (rotate by ±90°)
-        perp_left = np.array([[-heading[0,0]], [heading[1,0]]])
-        perp_right = -perp_left
+        obs_centroid = np.mean(obstacles, axis=0).reshape(2,1)
 
-        # decide which direction to steer (away from the obstacle)
-        steer_dir = perp_right if np.dot(perp_left.reshape(2,), to_obstacle.reshape(2,)) > 0 else perp_left
-        # steer_strength = max(self.lookahead_distance - min_dist, 0.0)
-        return vec_scale(vec_norm(steer_dir), self.min_dist_to_obst)
+        # to_obs = vec_sub(pos_i, obs_centroid)
+        to_obs = vec_sub(obs_centroid, pos_i)
+
+        # perpendicular to heading (rotate by ±90°)
+        to_obs_norm = vec_norm(to_obs)
+
+        perp_right = np.array([[-to_obs_norm[1,0]], [to_obs_norm[0,0]]])
+        perp_left = -perp_right
+
+        steer_dir = perp_right if np.dot(perp_right.reshape(2,), vel_i.reshape(2,)) < 0 else perp_left
+
+        final_dir = (0.7 * steer_dir) + (0.3 * to_obs_norm)
+
+        self.get_logger().info(f"Velocity: {final_dir.reshape(2,)}")
+        return final_dir.reshape(2,1)
+
+        
+        # v = np.zeros((2,1))
+        
+        # for obs in obstacles:
+        #     dir = vec_norm(vel_i)
+
+        #     to_obs = vec_sub(obs, pos_i)
+
+        #     # perpendicular to heading (rotate by ±90°)
+        #     to_obs_norm = vec_norm(to_obs)
+
+        #     dot = np.dot(to_obs_norm.reshape(2,), dir.reshape(2,))
+
+        #     if dot < np.cos(self.fov / 2):
+        #         continue
+
+        #     perp_right = np.array([[-to_obs_norm[1,0]], [to_obs_norm[0,0]]])
+        #     perp_left = -perp_right
+
+        #     steer_dir = perp_left if np.dot(perp_right.reshape(2,), vel_i.reshape(2,)) < 0 else perp_right
+
+        #     final_dir = (0.6 * steer_dir) + (0.4 * to_obs_norm)
+
+        #     v += final_dir
+
+        # self.get_logger().info(f"Velocity: {v.reshape(2,)}")
+        # return v.reshape(2,1) 
+        # steer_strength = vec_len(to_obs) / self.lookahead_distance
+        
+        
+        # steer_strength = max((self.lookahead_distance + self.robot_radius) - vec_len(to_obs), 0.0)
+        # steer_strength = vec_len(to_obs) / self.lookahead_distance
+
+        
+        # self.get_logger().info(f"{vec_scale(steer_dir, steer_strength)}")
+        # return vec_scale(final_dir, steer_strength)
+
+        # most_threatening = None
+        # min_dist = float('inf')
+
+
+        # for s in range(1, steps):
+        #     # position of the point along the lookahead path
+        #     p_world = pos_i + (heading * (s * self.resolution))
+        #     px, py = float(p_world[0,0]), float(p_world[1,0])
+        #     # convert to map indices
+        #     mx, my = world_to_map(p_world, self.origin, self.resolution)
+        #     if not (0 <= mx < self.map_width and 0 <= my < self.map_height):
+        #         continue
+ 
+        #     if inflated_gridmap[my, mx] == 100:   # occupied cell (threshold)
+        #         # compute distance of the obstacle to robot center
+        #         obstacle_pos = np.array([[px], [py]])
+        #         dist = vec_len(vec_sub(obstacle_pos, pos_i))
+        #         if dist <= min_dist:
+        #             min_dist = dist
+        #             most_threatening = np.copy(obstacle_pos)
+
+        # # if no obstacle ahead, no steering correction
+        # if most_threatening is None:
+        #     self.get_logger().info("no threatening obstacle ahead!!!")
+        #     return np.zeros((2,1))
+        
+        # # Compute lateral (sideways) steering vector
+        # to_obstacle = vec_sub(most_threatening, pos_i)
+        # # perpendicular to heading (rotate by ±90°)
+        # perp_left = np.array([[-heading[0,0]], [heading[1,0]]])
+        # perp_right = -perp_left
+
+        # # decide which direction to steer (away from the obstacle)
+        # steer_dir = perp_right if np.dot(perp_left.reshape(2,), to_obstacle.reshape(2,)) > 0 else perp_left
+        # # steer_strength = max(self.lookahead_distance - min_dist, 0.0)
+        # return vec_scale(vec_norm(steer_dir), self.min_dist_to_obst)
+    
+    
+    def obstacles_in_front_fov(self, robot_pos, heading_yaw):
+        """
+        Extract obstacles within a conical field of view in front of the robot.
+        """
+
+        # Relative positions
+        rel = self.obstacles - robot_pos.T
+
+        # Compute angle and distance of each obstacle relative to robot
+        distances = np.linalg.norm(rel, axis=1)
+        angles = np.arctan2(rel[:, 1], rel[:, 0])  # relative to +x axis
+
+        # Angular difference between obstacle and robot heading
+        angle_diff = np.arctan2(np.sin(angles - heading_yaw), np.cos(angles - heading_yaw))
+
+        # Keep obstacles within range and FOV
+        mask = (distances <= (self.lookahead_distance + self.robot_radius)) & (np.abs(angle_diff) <= self.fov / 2)
+        return self.obstacles[mask]
+    
+    def filter_obstacles_in_fov(self,
+    agent_pos: np.ndarray,
+    agent_dir: np.ndarray,
+    ) -> np.ndarray:
+        """
+        Return the subset of obstacles that are
+          * inside the forward-facing cone (total angle = fov_radians)
+          * closer than max_distance
+
+        Parameters
+        ----------
+        agent_pos          : (2,1) ndarray – agent location
+        agent_dir          : (2,1) ndarray – forward direction (will be normalised)
+        fov_radians        : float      – total field-of-view angle
+        max_distance       : float      – maximum distance to consider
+        obstacle_positions : (N,2) ndarray – one obstacle per row
+
+        Returns
+        -------
+        filtered_obstacles : (M,2) ndarray – M <= N
+        """
+        # ------------------------------------------------------------------
+        # 1. Normalise the direction vector (guard against zero-length)
+        # ------------------------------------------------------------------
+        dir_norm = np.linalg.norm(agent_dir)
+        if dir_norm == 0.0:
+            raise ValueError("agent_dir must not be the zero vector")
+        agent_dir = agent_dir / dir_norm                     # now shape (2,1)
+
+        # ------------------------------------------------------------------
+        # 2. Vector from agent to every obstacle  (N,2)
+        # ------------------------------------------------------------------
+        deltas = self.obstacles - agent_pos.T            # broadcasting (2,1) → (N,2)
+
+        # ------------------------------------------------------------------
+        # 3. Distance mask
+        # ------------------------------------------------------------------
+        dists = np.linalg.norm(deltas, axis=1)               # (N,)
+        dist_mask = dists <= (self.lookahead_distance + self.robot_radius)
+        if not np.any(dist_mask):
+            return np.empty((0, 2))                          # nothing in range
+
+        # ------------------------------------------------------------------
+        # 4. Normalised direction to each candidate obstacle
+        # ------------------------------------------------------------------
+        cand_deltas = deltas[dist_mask]                      # (M,2)
+        cand_dists  = dists[dist_mask]                       # (M,)
+        cand_dirs   = cand_deltas / cand_dists[:, np.newaxis]   # (M,2)
+
+        # ------------------------------------------------------------------
+        # 5. Angle mask – dot product ≥ cos(half_fov)
+        # ------------------------------------------------------------------
+        half_fov = self.fov / 2.0
+        cos_thr  = np.cos(half_fov)
+
+        # dot = agent_dir^T * cand_dirs   → (M,)
+        dots = np.dot(cand_dirs, agent_dir).ravel()
+        angle_mask = dots >= cos_thr
+
+        # ------------------------------------------------------------------
+        # 6. Return the filtered positions
+        # ------------------------------------------------------------------
+        return self.obstacles[dist_mask][angle_mask]
 
     # Publisher function to publish control velocity to each robot in flock
     def pub_rob_vel(self, idx:int, desired_vel: np.ndarray):
